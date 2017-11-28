@@ -24,6 +24,18 @@ struct mirror_dev {
 static int mirror_num_blocks(struct blkdev *dev)
 {
     /* your code here */
+    if(dev == NULL){
+        return 0;
+    }
+    struct blkdev *mirror = dev->private;
+    struct blkdev *disk0 = mirror->disks[0];
+    struct blkdev *disk1 = mirror->disks[1];
+    if(disk0 != NULL){
+        return disk0->ops->num_blocks(disk0);
+    }
+    if(disk1 != NULL){
+        return disk1->ops->num_blocks(disk1);
+    }
     return 0;
 }
 
@@ -37,9 +49,37 @@ static int mirror_num_blocks(struct blkdev *dev)
  */
 static int mirror_read(struct blkdev * dev, int first_blk,
                        int num_blks, void *buf)
-{
-    /* your code here */
-    return 0;
+{   
+    int result = 0;
+    if(dev->private == NULL){
+        return E_UNAVAIL;
+    }
+    else{
+        struct blkdev *mirror = dev->private;
+        if(mirror == NULL){
+            return E_UNAVAIL;
+        }
+        struct blkdev *disk0 = mirror->disks[0];
+        struct blkdev *disk1 = mirror->disks[1];
+        if(disk0 != NULL){
+            result = disk0->ops->read(disk0,first_blk,num_blks,buf);
+            if(result != E_UNAVAIL && result != E_BADADDR){
+                return result;
+            }
+            else{
+                disk0->ops->close(disk0);
+                disk0 = NULL;
+            }
+        }
+        if(disk1 == NULL)
+            return E_UNAVAIL;
+        result = disk1->ops->read(disk1,first_blk,num_blks,buf);
+        if(result == E_UNAVAIL || result == E_BADADDR){
+            disk1->ops->close(disk1);
+            disk1 = NULL;
+        }
+    }
+    return result;
 }
 
 /* write to both sides of the mirror, or the remaining side if one has
@@ -51,8 +91,44 @@ static int mirror_read(struct blkdev * dev, int first_blk,
 static int mirror_write(struct blkdev * dev, int first_blk,
                         int num_blks, void *buf)
 {
-    /* your code here */
-    return 0;
+    int flag = 2;
+    if(dev != NULL){
+        if(dev->private != NULL){
+            struct blkdev *mirror = dev->private;
+            if(mirror->disks[0] == NULL && mirror->disks[1] == NULL){
+                return E_UNAVAIL;
+            }
+            if(mirror->disks[0] != NULL){
+                struct blkdev *disk0 = mirror->disks[0];
+                if(disk0->ops->read(disk0, first_blk, num_blks, buf) != E_UNAVAIL){
+                    disk0->ops->write(disk0, first_blk, num_blks,buf);
+                    flag--;
+                }
+                else{
+                    disk0 = NULL;
+                }
+            }
+            else{
+                if(mirror->disks[1] != NULL){
+                    struct blkdev *disk1 = mirror->disks[1];
+                    if(disk1->ops->read(disk1，first_blk, num_blks, buf) != E_UNAVAIL){
+                        disk1->ops->write(disk1, first_blk, num_blks,buf);
+                        flag--;
+                    }
+                    else{
+                        disk1 = NULL;
+                    }
+                }
+            }
+        }
+    }
+    if(flag == 2){
+        return E_UNAVAIL;
+    }
+    else{
+        return 0;
+    }
+    
 }
 
 /* clean up, including: close any open (i.e. non-failed) devices, and
@@ -61,6 +137,19 @@ static int mirror_write(struct blkdev * dev, int first_blk,
 static void mirror_close(struct blkdev *dev)
 {
     /* your code here */
+    if(dev != NULL && dev->private != NULL){
+        struct blkddev *mirror = dev->private;
+        if(mirror->disks[0] != NULL){
+            mirror->disks[0]->ops->close(mirror->disks[0]);
+            mirror->disks[0] = NULL;
+        }
+        if(mirror->disks[1] != NULL){
+            mirror->disks[1]->ops->close(mirror->disks[1]);
+            mirror->disks[1] = NULL;
+        }
+        free(dev->private);
+        free(dev);
+    }
 }
 
 struct blkdev_ops mirror_ops = {
@@ -80,15 +169,14 @@ struct blkdev *mirror_create(struct blkdev *disks[2])
     struct mirror_dev *mdev = malloc(sizeof(*mdev));
 
     /* your code here */
-    if (disks[0]->ops->num_blocks != disks[1]->ops->num_blocks) {
-		printf("Mirrioring creating failed: size mis-match.\n");
-		return NULL;
-	}		
+    if (disks[0]->ops->num_blocks(disks[0]) != disks[1]->ops->num_blocks(disks[0])) {
+        printf("Mirrioring creating failed: size mis-match.\n");
+        return E_SIZE;
+    }
     mdev->disks[0] = disks[0];
     mdev->disks[1] = disks[1];
     mdev->nblks = 2 * mirror_num_blocks(disks[0]); 
-    /* */
-    
+
     dev->private = mdev;
     dev->ops = &mirror_ops;
 
@@ -101,16 +189,16 @@ struct blkdev *mirror_create(struct blkdev *disks[2])
  * from this call.
  */
 int mirror_replace(struct blkdev *volume, int i, struct blkdev *newdisk)
-{
-	/* your code here */
-    if (disks[0]->ops->num_blocks != disks[1]->ops->num_blocks) {
-		printf("Mirrioring replacing failed: size mis-match.\n");
-		return E-SIZE;
-	}
-	newdisk->private = volume->private;
-	newdisk->ops = volume->ops;
-	/* */
-	
+{   
+    int good = 1 -i;
+    struct blkdev *finedisk = volume->disks[good];
+    if(finedisk->ops->num_blocks(finedisk) == newdisk->ops->num_blocks(newdisk)){
+        volume->disks[i] = newdisk;
+    }
+    else{
+        printf("Mirrioring replacing failed: size mis-match.\n");
+        return E-SIZE;
+    }
     return SUCCESS;
 }
 
@@ -118,7 +206,6 @@ int mirror_replace(struct blkdev *volume, int i, struct blkdev *newdisk)
 
 int raid0_num_blocks(struct blkdev *dev)
 {
-	/* your code here*/
     return 0;
 }
 
@@ -151,16 +238,6 @@ static void raid0_close(struct blkdev *dev)
 {
 }
 
-/* your code here */
-struct blkdev_ops striping_ops = {
-	.num_blocks = raid0_num_blocks,
-	.read = raid0_read,
-	.write = raid0_write,
-	.close = raid0_close
-};
-/* */
-
-
 /* create a striped volume across N disks, with a stripe size of
  * 'unit'. (i.e. if 'unit' is 4, then blocks 0..3 will be on disks[0],
  * 4..7 on disks[1], etc.)
@@ -170,35 +247,7 @@ struct blkdev_ops striping_ops = {
  */
 struct blkdev *raid0_create(int N, struct blkdev *disks[], int unit)
 {
-	/* */
-	struct striping_dev {
-		struct blkdev *disks[N];
-		int nblks;
-	};
-	
-	struct blkdev *dev = malloc(sizeof(*dev));
-    struct striping_dev *sdev = malloc(sizeof(*sdev));
-    
-    int each_size = disks[0]->ops->num_blocks;
-
-	for (int i = 1; i < N; i++) 
-		if (each_size != disks[i]->ops->num_blocks) {
-			printf("Striping creating failed: size mis-match.\n");
-			return NULL;
-		}
-	
-	// not sure: include non-used sectors
-	for (int i = 0; i < N; i++) 	
-		sdev->disks[i] = disks[i];
-   
-    sdev->nblks = N * raid0_num_blocks(disks[0]); 
-    // 
-    
-    dev->private = sdev;
-    dev->ops = &striping_ops;
-
-    return dev;
-	/* */
+    return NULL;
 }
 
 /**********   RAID 4  ***************/
@@ -262,15 +311,6 @@ static void raid4_close(struct blkdev *dev)
 {
 }
 
-/* your code here */
-struct blkdev_ops raid4_ops = {
-	.num_blocks = raid4_num_blocks, //need define here
-	.read = raid4_read,
-	.write = raid4_write,
-	.close = raid4_close
-};
-/* */
-
 /* Initialize a RAID 4 volume with strip size 'unit', using
  * disks[N-1] as the parity drive. Do not write to the disks - assume
  * that they are properly initialized with correct parity. (warning -
@@ -279,7 +319,7 @@ struct blkdev_ops raid4_ops = {
  */
 struct blkdev *raid4_create(int N, struct blkdev *disks[], int unit)
 {
-   return NULL;
+    return NULL;
 }
 
 /* replace failed device 'i' in a RAID 4. Note that we assume

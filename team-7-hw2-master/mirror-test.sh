@@ -1,0 +1,1 @@
+dd if=/dev/zero bs=512 count=2 | tr '\0' 'C' > test.img
